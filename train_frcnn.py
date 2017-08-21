@@ -20,19 +20,16 @@ sys.setrecursionlimit(40000)
 
 parser = OptionParser()
 
-parser.add_option("-p", "--path", dest="train_path", help="Path to training data.")
-parser.add_option("-o", "--parser", dest="parser", help="Parser to use. One of simple or pascal_voc",
-                  default="pascal_voc")
 parser.add_option("-n", "--num_rois", dest="num_rois", help="Number of RoIs to process at once.", default=32)
 parser.add_option("--network", dest="network", help="Base network to use. Supports vgg or resnet50.",
                   default='resnet50')
 parser.add_option("--hf", dest="horizontal_flips", help="Augment with horizontal flips in training. (Default=false).",
-                  action="store_true", default=False)
+                  action="store_true", default=True)
 parser.add_option("--vf", dest="vertical_flips", help="Augment with vertical flips in training. (Default=false).",
-                  action="store_true", default=False)
+                  action="store_true", default=True)
 parser.add_option("--rot", "--rot_90", dest="rot_90",
                   help="Augment with 90 degree rotations in training. (Default=false).",
-                  action="store_true", default=False)
+                  action="store_true", default=True)
 parser.add_option("--num_epochs", dest="num_epochs", help="Number of epochs.", default=2000)
 parser.add_option("--config_filename", dest="config_filename",
                   help="Location to store all the metadata related to the training (to be used when testing).",
@@ -43,16 +40,6 @@ parser.add_option("--input_weight_path", dest="input_weight_path",
                   help="Input path for weights. If not specified, will try to load default weights provided by keras.")
 
 (options, args) = parser.parse_args()
-
-if not options.train_path:  # if filename is not given
-    parser.error('Error: path to training data must be specified. Pass --path to command line')
-
-if options.parser == 'pascal_voc':
-    from keras_frcnn.pascal_voc_parser import get_data
-elif options.parser == 'simple':
-    from keras_frcnn.simple_parser import get_data
-else:
-    raise ValueError("Command line option parser must be one of 'pascal_voc' or 'simple'")
 
 # pass the settings from the command line, and persist them in the config object
 C = config.Config()
@@ -69,7 +56,6 @@ if options.network == 'vgg':
     from keras_frcnn import vgg as nn
 elif options.network == 'resnet50':
     from keras_frcnn import resnet as nn
-
     C.network = 'resnet50'
 else:
     print('Not a valid model')
@@ -82,7 +68,9 @@ else:
     # set the path to weights based on backend and model
     C.base_net_weights = nn.get_weight_path()
 
-all_imgs, classes_count, class_mapping = get_data(options.train_path)
+# load dlr data
+dlr_data = pickle.load(open('dlr/dlr.pkl', 'rb'))
+all_imgs, classes_count, class_mapping = dlr_data['all_imgs'], dlr_data['classes_count'], dlr_data['class_mapping']
 
 if 'bg' not in classes_count:
     classes_count['bg'] = 0
@@ -189,23 +177,17 @@ for epoch_num in range(num_epochs):
                 if mean_overlapping_bboxes == 0:
                     print('RPN is not producing bounding boxes that overlap the ground truth boxes.' +
                           ' Check RPN settings or keep training.')
-
             X, Y, img_data = next(data_gen_train)
-
             loss_rpn = model_rpn.train_on_batch(X, Y)
-
             P_rpn = model_rpn.predict_on_batch(X)
-
             R = roi_helpers.rpn_to_roi(P_rpn[0], P_rpn[1], C, K.image_dim_ordering(), use_regr=True, overlap_thresh=0.7,
                                        max_boxes=300)
             # note: calc_iou converts from (x1,y1,x2,y2) to (x,y,w,h) format
             X2, Y1, Y2, IouS = roi_helpers.calc_iou(R, img_data, C, class_mapping)
-
             if X2 is None:
                 rpn_accuracy_rpn_monitor.append(0)
                 rpn_accuracy_for_epoch.append(0)
                 continue
-
             neg_samples = np.where(Y1[0, :, -1] == 1)
             pos_samples = np.where(Y1[0, :, -1] == 0)
 
@@ -257,7 +239,8 @@ for epoch_num in range(num_epochs):
             iter_num += 1
 
             progbar.update(iter_num,
-                           [('rpn_cls', np.mean(losses[:iter_num, 0])), ('rpn_regr', np.mean(losses[:iter_num, 1])),
+                           [('rpn_cls', np.mean(losses[:iter_num, 0])),
+                            ('rpn_regr', np.mean(losses[:iter_num, 1])),
                             ('detector_cls', np.mean(losses[:iter_num, 2])),
                             ('detector_regr', np.mean(losses[:iter_num, 3]))])
 
